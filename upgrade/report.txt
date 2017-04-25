@@ -1,0 +1,26 @@
+--------------------------------------------------------------------------------
+Processing file 'tf_common.py'
+ outputting to 'tf_common.py'
+--------------------------------------------------------------------------------
+
+'tf_common.py' Line 43
+--------------------------------------------------------------------------------
+
+Renamed function 'tf.initialize_all_variables' to 'tf.global_variables_initializer'
+
+    Old:     init = tf.initialize_all_variables()
+                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~   
+    New:     init = tf.global_variables_initializer()
+                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~   
+
+'tf_common.py' Line 47
+--------------------------------------------------------------------------------
+
+Renamed function 'tf.train.SummaryWriter' to 'tf.summary.FileWriter'
+
+    Old:     summary_writer = tf.train.SummaryWriter(model_dir)
+                              ~~~~~~~~~~~~~~~~~~~~~~            
+    New:     summary_writer = tf.summary.FileWriter(model_dir)
+                              ~~~~~~~~~~~~~~~~~~~~~            
+
+
