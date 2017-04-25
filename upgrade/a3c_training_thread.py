@@ -11,6 +11,7 @@ import scipy.misc
 from accum_trainer import AccumTrainer
 from game_ac_network import Network
 import cv2
+import IPython
 
 LOG_INTERVAL = 100
 PERFORMANCE_LOG_INTERVAL = 1000
@@ -66,8 +67,8 @@ class A3CTrainingThread(object):
         # game initialization
         self.observation = self.game.reset()
         self.observation, reward, end_episode, _ = self.game.step(1)
-        #self.observation = self.preprocess([self.observation])
-        self.history = [self.rgb2gray(self.observation) for _ in range(4)]#FLAGS.history_frames
+        #self.observation = self.preprocess_img([self.observation])
+        self.history = [self.preprocess_img(self.observation) for _ in range(4)]#FLAGS.history_frames
         self.observation = np.dstack(self.history)
 
         self.local_t = 0
@@ -114,13 +115,20 @@ class A3CTrainingThread(object):
         if FLAGS.save_frames:
             if self.thread_index == 0 and len(os.listdir(os.path.join(FLAGS.model_dir, "images"))) < 1000:
                 scipy.misc.imsave("%s/%i.png" % (os.path.join(FLAGS.model_dir, "images"), i), rgb["image"][0])
+        return np.dot(rgb[...,:3], [0.299, 0.587, 0.114])
 
-        img = np.asarray(rgb["image"][0])[..., :3]
-        img = np.dot(img, [0.299, 0.587, 0.114])
-        img = scipy.misc.imresize(img, (84, 84)) / 255.0
-        #flip H
-        #
-        #img = np.fliplr(img)
+    def resize(self, img, size=(84, 84)):
+        return scipy.misc.imresize(img, size)
+
+    def normalize_img(self, img):
+        return img/255.0
+
+    def preprocess_img(self, img,  i=0):
+        return self.normalize_img(
+            self.resize(
+                self.rgb2gray(img, i)
+                )
+            )
 
 
 
@@ -129,10 +137,10 @@ class A3CTrainingThread(object):
 
     def preprocess(self, frames, name=0):
         if len(frames) == 1:
-            gray = self.rgb2gray(frames[0])
+            gray = self.preprocess_img(frames[0])
             return np.dstack([gray, gray, gray, gray])
 
-        return np.dstack([self.rgb2gray(frame) for frame in frames])
+        return np.dstack([self.preprocess_img(frame) for frame in frames])
 
     def action2string(self, action):
         moveX, moveZ, turn = 0, 0, 0
@@ -233,12 +241,13 @@ class A3CTrainingThread(object):
             #else:
 
             #for i in range(FLAGS.skip_frames):
-            new_obs, reward, end_episode, _ = self.game.step(self.action2string(action))
+            #IPython.embed()
+            new_obs, reward, end_episode, _ = self.game.step(action)
 
             if len(self.history) > 10:
                 del self.history[0]
 
-            self.history.append(self.rgb2gray(new_obs, global_t + self.local_t))#, "%i-a%i" % (global_t, action)
+            self.history.append(self.preprocess_img(new_obs, global_t + self.local_t))#, "%i-a%i" % (global_t, action)
 
             def create_history():
                 return np.dstack([self.get_frame(1), self.get_frame(2), self.get_frame(3), self.get_frame(4)])
@@ -278,7 +287,7 @@ class A3CTrainingThread(object):
                 #if USE_ALE:
                 self.game.reset()
                 #else:
-                #self.history = [self.rgb2gray(self.game.step(0))]
+                #self.history = [self.preprocess_img(self.game.step(0))]
                 #self.observation = create_history()
                 #if USE_LSTM:
                 #    self.local_network.reset_state()

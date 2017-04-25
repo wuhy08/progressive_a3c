@@ -60,7 +60,7 @@ class AccumTrainer(object):
             with tf.name_scope(values=[], name=name, default_name=self._name) as name:
                 for var, grad, accum_grad in zip(self._var_list, self._grad_list, self._accum_grad_list):
                     with tf.name_scope("accum_" + var.op.name):
-                        IPython.embed()
+                        #IPython.embed()
                         accumulate_ops.append(tf.assign_add(accum_grad, grad))
 
                 return tf.group(*accumulate_ops, name=name)
