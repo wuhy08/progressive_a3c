@@ -20,7 +20,23 @@ FLAGS = flags.FLAGS
 
 class Trainer:
     def __init__(self):
-        pass
+        self.global_t = 0
+        image_dir = os.path.join(FLAGS.model_dir, "images")
+        if not os.path.exists(image_dir):
+            os.makedirs(image_dir)
+            print("Creating folder: {}".format(image_dir))
+        constants.device = "/gpu:0" if FLAGS.use_gpu else "/cpu:0"
+        self.stop_requested = False
+        # prepare session
+        self.sess = tf.Session(
+            config=tf.ConfigProto(
+                log_device_placement=False,
+                allow_soft_placement=True
+            )
+        )
+        self.training_threads = []
+        self.global_network = None
+
 
     def signal_handler(self, signal, frame):
         print('Stop requested.')
@@ -38,8 +54,13 @@ class Trainer:
             if self.global_t > FLAGS.global_t_max:
                 break
 
-            diff_global_t = training_thread.process(self.sess, self.global_t, self.summary_writer,
-                                                    self.summary_op, self.score_input)
+            diff_global_t = training_thread.process(
+                self.sess, 
+                self.global_t, 
+                self.summary_writer,
+                self.summary_op, 
+                self.score_input
+            )
 
             if self.global_t % FLAGS.save_every > (self.global_t + diff_global_t) % FLAGS.save_every:# or\
              #       (self.global_t < 6000000 and (self.global_t % 1000000 > (self.global_t + diff_global_t) % 1000000)):
@@ -50,72 +71,65 @@ class Trainer:
 
             self.global_t += diff_global_t
 
-    def start(self):
-        self.global_t = 0
-
-        if not os.path.exists(os.path.join(FLAGS.model_dir, "images")):
-            os.makedirs(os.path.join(FLAGS.model_dir, "images"))
-
-        constants.device = "/cpu:0"
-        if FLAGS.use_gpu:
-            constants.device = "/gpu:0"
-
+    def config(self):
         initial_learning_rate = FLAGS.init_lr
-
-        self.stop_requested = False
-
-        # prepare session
-        self.sess = tf.Session(config=tf.ConfigProto(log_device_placement=False,
-                                                     allow_soft_placement=True))
-
-        self.global_network = Network(name="core_%s" % constants.task_name)
-
-        self.training_threads = []
-
         learning_rate_input = tf.placeholder("float")
-
-        grad_applier = RMSPropApplier(learning_rate=learning_rate_input,
-                                      decay=FLAGS.rmsp_alpha,
-                                      momentum=0.0,
-                                      epsilon=FLAGS.rmsp_epsilon,
-                                      clip_norm=FLAGS.grad_norm_clip,
-                                      device=constants.device)
-
+        grad_applier = RMSPropApplier(
+            learning_rate=learning_rate_input,
+            decay=FLAGS.rmsp_alpha,
+            momentum=0.0,
+            epsilon=FLAGS.rmsp_epsilon,
+            clip_norm=FLAGS.grad_norm_clip,
+            device=constants.device
+        )
+        #Network will creat PNN
+        self.global_network = Network(
+            name="core_{}".format(constants.task_name)
+        )
         print("CREATING AGENTS")
-
         for i in range(FLAGS.threads):
-            training_thread = A3CTrainingThread(i, self.global_network, initial_learning_rate,
-                                                learning_rate_input,
-                                                grad_applier, FLAGS.global_t_max,
-                                                device=constants.device, sess=self.sess, name="agent_%s_%i" % (constants.task_name, i))
+            training_thread = A3CTrainingThread(
+                i, 
+                self.global_network, 
+                initial_learning_rate,
+                learning_rate_input,
+                grad_applier, 
+                FLAGS.global_t_max,
+                device=constants.device, 
+                sess=self.sess, 
+                name="agent_{}_{}".format(constants.task_name, i)
+            )
             self.training_threads.append(training_thread)
-
         init = tf.global_variables_initializer()
         self.sess.run(init)
 
-
-
+    def setTensorBoard(self):
         # summary for tensorboard
         self.score_input = tf.placeholder(tf.int32)
         tf.summary.scalar("score", self.score_input)
 
         self.summary_op = tf.summary.merge_all()
-        self.summary_writer = tf.summary.FileWriter(FLAGS.model_dir, self.sess.graph_def)
+        self.summary_writer = tf.summary.FileWriter(
+            FLAGS.model_dir, self.sess.graph_def
+        )
 
+    def setCheckPoint(self):
         # init or load checkpoint with saver
         self.saver = tf.train.Saver()
-
         checkpoint = tf.train.get_checkpoint_state(FLAGS.model_dir)
         if checkpoint and checkpoint.model_checkpoint_path:
-            self.saver.restore(self.sess, checkpoint.model_checkpoint_path
-                               if FLAGS.checkpoint is None else FLAGS.checkpoint)
+            self.saver.restore(
+                self.sess, 
+                checkpoint.model_checkpoint_path
+                    if FLAGS.checkpoint is None else FLAGS.checkpoint
+            )
             print("checkpoint loaded:", checkpoint.model_checkpoint_path)
             tokens = checkpoint.model_checkpoint_path.split("-")
             # set global step
             self.global_t = int(tokens[-1])
             print(">>> global step set: ", self.global_t)
             # set wall time
-            self.wall_t_fname = FLAGS.model_dir + '/' + 'wall_t.' + str(self.global_t)
+            self.wall_t_fname = '{}/wall_t.{}'.format(FLAGS.model_dir, self.global_t)
             with open(self.wall_t_fname, 'r') as f:
                 self.wall_t = float(f.read())
         else:
@@ -123,29 +137,30 @@ class Trainer:
             # set wall time
             self.wall_t = 0.0
 
+
+    def start(self):
         if FLAGS.transfer_model is not None:
             self.global_network.load(self.sess, FLAGS.transfer_model)
 
         train_threads = []
         for i in range(FLAGS.threads):
-            train_threads.append(threading.Thread(target=self.train_function, args=(i,)))
+            train_threads.append(
+                threading.Thread(
+                    target=self.train_function, 
+                    args=(i,)
+                )
+            )
 
         signal.signal(signal.SIGINT, self.signal_handler)
-
         # set start time
         self.start_time = time.time() - self.wall_t
-
         for t in train_threads:
             t.start()
-
         print('Press Ctrl+C to stop')
         signal.pause()
-
         print('Now saving data. Please wait')
-
         for t in train_threads:
             t.join()
-
         self.save()
 
     def save(self):
@@ -154,15 +169,24 @@ class Trainer:
 
         # write wall time
         self.wall_t = time.time() - self.start_time
-        self.wall_t_fname = FLAGS.model_dir + '/' + 'wall_t.' + str(self.global_t)
+        self.wall_t_fname = '{}/wall_t.{}'.format(FLAGS.model_dir, self.global_t)
         with open(self.wall_t_fname, 'w') as f:
             f.write(str(self.wall_t))
 
         if not os.path.exists(FLAGS.model_dir + "/core"):
             os.mkdir(FLAGS.model_dir + '/core')
-        self.saver.save(self.sess, FLAGS.model_dir + '/' + 'checkpoint', global_step=self.global_t)
+        self.saver.save(
+            self.sess, 
+            FLAGS.model_dir + '/checkpoint', 
+            global_step=self.global_t
+        )
 
-        self.global_network.save(self.sess, FLAGS.model_dir + '/core/' + 'checkpoint-%i.p' % self.global_t)
+        self.global_network.save(
+            self.sess, 
+            '{}/core/checkpoint-{}.p'.format(
+                FLAGS.model_dir,self.global_t
+            )
+        )
 
 if __name__ == "__main__":
     flags.DEFINE_integer("local_t_max", 5, "local t max")
@@ -191,5 +215,9 @@ if __name__ == "__main__":
     constants.tasks = FLAGS.column_names.split(",")
     constants.task_name = constants.tasks[-1]
 
-    Trainer().start()
+    trainer = Trainer()
+    trainer.config()
+    trainer.setTensorBoard()
+    trainer.setCheckPoint()
+    trainer.start()
 

@@ -6,27 +6,30 @@ import constants
 import pickle
 
 FLAGS = tf.app.flags.FLAGS
+IMG_SIZE = constants.img_size
+HIST_FRM = constants.history_frames
 
 class Network(object):
     def __init__(self, name="agent"):
         self.name = name
-
         with tf.device(constants.device):
             with tf.variable_scope(name):
                 self.create_pnn()
 
     def debug(self, sess):
-        fd = {self.s: np.ones((1, 84, 84, 4))}
+        fd = {self.s: np.ones((1, IMG_SIZE, IMG_SIZE, 4))}
 
         a = sess.run(self.pi, feed_dict=fd)
-        b = sess.run(self.pi, feed_dict={self.s: np.zeros((1, 84, 84, 4))})
+        b = sess.run(self.pi, feed_dict={self.s: np.zeros((1, IMG_SIZE, IMG_SIZE, 4))})
 
         exit()
 
     def create_pnn(self):
-        #self.s = tf.placeholder("float", [None, FLAGS.screen_height, FLAGS.screen_width, constants.history_frames], "state")
-        self.s = tf.placeholder("float", [None, 84, 84, constants.history_frames],
-                                "state")
+        self.s = tf.placeholder(
+            "float", 
+            [None, IMG_SIZE, IMG_SIZE, HIST_FRM],
+            "state"
+        )
         self.train_vars = []
         self.var_dict = {}
         self.all_vars = []
@@ -34,12 +37,11 @@ class Network(object):
 
         for i in range(len(constants.tasks)):
             print(">>>>>>>>>>>>>>>>>>>>>>")
-            p, v, col_vars, col_h = create_column(constants.tasks, i, self.s, self.col_hiddens)
-
+            p, v, col_vars, col_h = create_column(
+                constants.tasks, i, self.s, self.col_hiddens)
             vvv = []#col_vars[:-4]
             if i == len(constants.tasks)-1:
                 vvv = col_vars
-                #print([var.name for var in vvv])
 
             self.all_vars.extend(col_vars)
 
@@ -173,7 +175,13 @@ class Network(object):
             col_dpdh = []
             for i in range(self.layers):
                 print(i)
-                dpdh_mat = np.power(sess.run(grads[k][i], feed_dict={self.s: [state]}), 2.0)
+                dpdh_mat = np.power(
+                    sess.run(
+                        grads[k][i], 
+                        feed_dict={self.s: [state]}
+                    ), 
+                    2.0
+                )
                 if len(dpdh_mat.shape) == 4:
                     dpdh_mat = np.sum(dpdh_mat, (0, 1, 2, 3))
                 else:
@@ -198,61 +206,61 @@ class Network(object):
 
         return dpdh  # fishers
 
-def create_column(col_names, self_i, state, col_hiddens):
-    print("creating column %i" % self_i)
-
+def create_column(col_names, i_task, state, col_hiddens):
+    print("creating column {}".format(i_task))
     arch = [
-        [8, constants.history_frames, 16, 4],  # size, in, out, stride
+        [8, HIST_FRM, 16, 4],  # size, in, out, stride
         [4, 16, 32, 2],
         [256],
         -1
     ]
-
     train_vars = []
-    lats = [] #k, i
+    lats = []
     c_lats = []
-
-    if self_i > 0:
+    # If current task is not task 0, build laterals
+    if i_task > 0:
         with tf.variable_scope("laterals"):
-            print("creating lateral connections to column %i" % self_i)
-
-            for col_i in range(self_i):
-                hiddens = col_hiddens[col_i]
-
-                print("##" + str(len(col_hiddens[col_i])))
-
+            print("creating lateral connections to column {}".format(i_task))
+            # From task 0 to current task
+            for i_col in range(i_task):
+                hiddens = col_hiddens[i_col]
+                print("##{}".format(len(hiddens)))
                 col_lats = []
+                print("creating laterals {} -> {} ".format(i_col, i_task))
+                with tf.variable_scope("{}_to_{}".format(col_names[i_col], col_names[i_task])):
 
-                print("creating laterals %i -> %i" % (col_i, self_i))
-
-                with tf.variable_scope("%s_to_%s" % (col_names[col_i], col_names[self_i])):
-                    for layer_i in range(len(hiddens)):
+                    # From the first layer to last layer
+                    for i_layer in range(len(hiddens)):
                         layer_lats = []
-                        print("###" + str(layer_i))
-                        dest_h_shape = arch[layer_i + 1]
+                        print("###Layer {}".format(i_layer))
+                        dest_h_shape = arch[i_layer + 1] # The shape of h in destination layer
 
-                        with tf.variable_scope("layer%ito%i" % (layer_i, layer_i+1)):
-                            orig_h = hiddens[layer_i]#tf.stop_gradient(hiddens[layer_i]) #origin
-
-                            print("layer %i -> %i" % (layer_i, layer_i + 1))
-
+                        with tf.variable_scope("layer{}to{}".format(i_layer, i_layer+1)):
+                            orig_h = hiddens[i_layer]
+                            #OLD: tf.stop_gradient(hiddens[i_layer]) #origin
+                            print("layer {} -> {}".format(i_layer, i_layer + 1))
                             if dest_h_shape == -1: # to policy and value layer
                                 with tf.variable_scope("policy"):
-                                    lat_h_p, lat_vars_p = lateral_connection(orig_h, [FLAGS.action_size], self_i)
+                                    lat_h_p, lat_vars_p = lateral_connection(
+                                        orig_h, [FLAGS.action_size], i_task
+                                    )
                                 with tf.variable_scope("value"):
-                                    lat_h_v, lat_vars_v = lateral_connection(orig_h, [1], self_i)
-
+                                    lat_h_v, lat_vars_v = lateral_connection(
+                                        orig_h, [1], i_task
+                                    )
                                 layer_lats.append(lat_h_p)
                                 layer_lats.append(lat_h_v)
                                 train_vars.extend(lat_vars_p)
                                 train_vars.extend(lat_vars_v)
                             else:
-                                lat_h, lat_vars = lateral_connection(orig_h, dest_h_shape, self_i, arch[layer_i + 1])
+                                lat_h, lat_vars = lateral_connection(
+                                    orig_h, dest_h_shape, i_task, arch[i_layer + 1]
+                                )
 
                                 layer_lats.append(lat_h)
                                 train_vars.extend(lat_vars)
 
-                            col_hiddens[col_i][layer_i] = orig_h
+                            col_hiddens[i_col][i_layer] = orig_h
 
                         col_lats.append(layer_lats)
                 lats.append(col_lats)
@@ -305,110 +313,213 @@ def create_column(col_names, self_i, state, col_hiddens):
 
     def add_lat(layer, i, act=tf.nn.relu):
 
-        if self_i <= 0:
+        if i_task <= 0:
             if act is None:
                 return layer[0], layer[1], layer[2]
             else:
                 return act(layer[0]), layer[1], layer[2]
         elif len(i) == 1:
-            print("adding %s and %s" % (layer[0], c_lats[i[0]]))
+            print("adding {} and {}".format(layer[0], c_lats[i[0]]))
             return act(layer[0]+c_lats[i[0]]), layer[1], layer[2]
         else:
             if act is None:
-                print("(value) adding %s and %s" % (layer[0], c_lats[i[0]][i[1]]))
+                print("(value) adding {} and {}".format(layer[0], c_lats[i[0]][i[1]]))
                 return layer[0] + c_lats[i[0]][i[1]], layer[1], layer[2]
             else:
-                print("(policy) adding %s and %s" % (layer[0], c_lats[i[0]][i[1]]))
+                print("(policy) adding {} and {}".format(layer[0], c_lats[i[0]][i[1]]))
                 return act(layer[0]+c_lats[i[0]][i[1]]), layer[1], layer[2]
 
-    train = self_i == len(constants.tasks)-1
-    print("column trainable: %s" % train)
+    train = i_task == len(constants.tasks)-1
+    print("column trainable: {}".format(train))
 
-    with tf.variable_scope(col_names[self_i]):
-        #resized = tf.image.resize_images(state, 84, 84)
+    with tf.variable_scope(col_names[i_task]):
+        #resized = tf.image.resize_images(state, IMG_SIZE, IMG_SIZE)
 
-        c1, w1, b1 = tfc.conv2d("c1", state, arch[0][1], arch[0][2], size=arch[0][0], stride=arch[0][3], trainable=train)
-        c2, w2, b2 = add_lat(tfc.conv2d("c2", c1, arch[1][1], arch[1][2], size=arch[1][0], stride=arch[1][3], act=None, trainable=train), [0])
+        c1, w1, b1 = tfc.conv2d(
+            "c1", 
+            state, 
+            arch[0][1], 
+            arch[0][2], 
+            size=arch[0][0], 
+            stride=arch[0][3], 
+            trainable=train
+        )
+        c2, w2, b2 = add_lat(
+            tfc.conv2d(
+                "c2", 
+                c1, 
+                arch[1][1], 
+                arch[1][2], 
+                size=arch[1][0], 
+                stride=arch[1][3], 
+                act=None, 
+                trainable=train
+            ), 
+            [0]
+        )
 
         c2_size = np.prod(c2.get_shape().as_list()[1:])
         c2_flat = tf.reshape(c2, [-1, c2_size])
 
-        if self_i <= 0:
-            h_fc1, w3, b3 = tfc.fc("fc1", c2_flat, c2_size, arch[2][0], trainable=train)
+        if i_task <= 0:
+            h_fc1, w3, b3 = tfc.fc(
+                "fc1", 
+                c2_flat, 
+                c2_size, 
+                arch[2][0], 
+                trainable=train
+            )
         else:
-            h_fc1, w3, b3 = tfc.fc("fc1", c2_flat, c2_size, arch[2][0], act=None, trainable=train)
+            h_fc1, w3, b3 = tfc.fc(
+                "fc1", 
+                c2_flat, 
+                c2_size, 
+                arch[2][0], 
+                act=None, 
+                trainable=train
+            )
 
             lat = c_lats[1]
-            print("adding %s and %s" % (h_fc1, lat))
+            print("adding {} and {}".format(h_fc1, lat))
             lat_size = np.prod(lat.get_shape().as_list()[1:])
             lat_flat = tf.reshape(lat, [-1, lat_size])
             h_fc1 = tf.nn.relu(h_fc1 + lat_flat)
 
-        pi, wp, bp = add_lat(tfc.fc("p_fc", h_fc1, arch[2][0], FLAGS.action_size, act=None, trainable=train), [2, 0], tf.nn.softmax)
-        v_, wv, bv = add_lat(tfc.fc("v_fc", h_fc1, arch[2][0], 1, act=None, trainable=train), [2, 1], None)
+        pi, wp, bp = add_lat(
+            tfc.fc(
+                "p_fc", 
+                h_fc1, 
+                arch[2][0], 
+                FLAGS.action_size, 
+                act=None, 
+                trainable=train
+            ), 
+            [2, 0], 
+            tf.nn.softmax
+        )
+        v_, wv, bv = add_lat(
+            tfc.fc(
+                "v_fc", 
+                h_fc1, 
+                arch[2][0], 
+                1, 
+                act=None, 
+                trainable=train
+            ), 
+            [2, 1], 
+            None
+        )
 
         v = tf.reshape(v_, [-1])
 
-        train_vars.extend([w1, b1, w2, b2, w3, b3, wp, bp, wv, bv])
+        train_vars.extend(
+            [w1, b1, 
+             w2, b2, 
+             w3, b3, 
+             wp, bp, 
+             wv, bv]
+        )
 
         col_vars = pi, v, train_vars, [c1, c2, h_fc1]
 
-        print("policy: %s" % pi)
-        print("last fc: %s" % h_fc1)
-        print("wp: %s" % wp.name)
-
-        print("created column %i." % self_i)
+        print("policy: {}".format(pi))
+        print("last fc: {}".format(h_fc1))
+        print("wp: {}".format(wp.name))
+        print("created column {}.".format(i_task))
 
         return col_vars
 
-def lateral_connection(orig_hidden, dest_shape, self_i, current_op_shape=None):
-
-
+def lateral_connection(orig_hidden, dest_shape, i_task, current_op_shape=None):
     print("adapter origin: %s" % orig_hidden.name)
-    train = self_i == len(constants.tasks)-1
-    #print(self_i)
+    train = i_task == len(constants.tasks)-1
+    #print(i_task)
     #print(len(constants.tasks)-1)
     print("lateral trainable: %s" % train)
     nonlinear = True
 
     omit_b = True
 
-    a = tf.get_variable(name="adapter", shape=[1], initializer=tf.constant_initializer(1), trainable=train)
+    a = tf.get_variable(
+        name="adapter", 
+        shape=[1], 
+        initializer=tf.constant_initializer(1), 
+        trainable=train
+    )
     ah = tf.multiply(a, orig_hidden)
 
     if nonlinear:
         if len(orig_hidden.get_shape().as_list()) == 4:
             maps_in = ah.get_shape().as_list()[3]
-            nic = int(maps_in / (2.0 * (self_i)))
-            lateral, w1, b1 = tfc.conv2d("V", ah, maps_in, nic, size=1, stride=1, trainable=train)  # reduction (keep bias)
+            nic = int(maps_in / (2.0 * (i_task)))
+            lateral, w1, b1 = tfc.conv2d(
+                "V", 
+                ah, 
+                maps_in, 
+                nic, 
+                size=1, 
+                stride=1, 
+                trainable=train
+            )  # reduction (keep bias)
 
-            print("1) conv 1x1: %s" % w1.get_shape())
+            print("1) conv 1x1: {}".format(w1.get_shape()))
 
             if len(dest_shape) > 1:   # conv layer to conv layer
-                lateral, w2, _ = tfc.conv2d("U", lateral, nic, current_op_shape[2], size=current_op_shape[0],
-                                           stride=current_op_shape[3], act=None, omit_bias=omit_b, padding="SAME", trainable=train)
-                print("2) conv 1x1: %s" % w2.get_shape())
-                print("end result: %s" % lateral.name)
+                lateral, w2, _ = tfc.conv2d(
+                    "U", 
+                    lateral, 
+                    nic, 
+                    current_op_shape[2], 
+                    size=current_op_shape[0],
+                    stride=current_op_shape[3], 
+                    act=None, 
+                    omit_bias=omit_b, 
+                    padding="SAME", 
+                    trainable=train
+                )
+                print("2) conv 1x1: {}".format(w2.get_shape()))
+                print("end result: {}".format(lateral.name))
 
                 return lateral, [w1, b1, w2]
 
             else:  # conv layer to fc layer
                 c_size = np.prod(lateral.get_shape().as_list()[1:])
                 c_flat = tf.reshape(lateral, [-1, c_size])
-                lateral, w2, _ = tfc.fc("U", c_flat, c_size, dest_shape[0], act=None, omit_bias=omit_b, trainable=train)
-                print("2) flattened conv fc: %s" % w2.get_shape())
-                print("end result: %s" % lateral.name)
+                lateral, w2, _ = tfc.fc(
+                    "U", 
+                    c_flat, 
+                    c_size, 
+                    dest_shape[0], 
+                    act=None, 
+                    omit_bias=omit_b, 
+                    trainable=train
+                )
+                print("2) flattened conv fc: {}".format(w2.get_shape()))
+                print("end result: {}".format(lateral.name))
 
                 return lateral, [w1, b1, w2]
 
         else:  # fc layer to fc layer
             n_in = ah.get_shape().as_list()[1]
-            ni = int(n_in / (2.0 * (self_i)))
-            lateral, w1, b1 = tfc.fc("V", ah, n_in, ni, trainable=train)  # reduction (keep bias)
-            print("1) fc: %s" % w1.get_shape())
-            lateral, w2, _ = tfc.fc("U", lateral, ni, dest_shape[0], act=None, omit_bias=omit_b, trainable=train) # to be added to next hidden
-            print("2) fc: %s" % w2.get_shape())
-            print("end result: %s" % lateral.name)
+            ni = int(n_in / (2.0 * (i_task)))
+            lateral, w1, b1 = tfc.fc(
+                "V", 
+                ah, 
+                n_in, 
+                ni, 
+                trainable=train
+            )  # reduction (keep bias)
+            print("1) fc: {}".format(w1.get_shape()))
+            lateral, w2, _ = tfc.fc(
+                "U", 
+                lateral, 
+                ni, 
+                dest_shape[0], 
+                act=None, 
+                omit_bias=omit_b, 
+                trainable=train
+            ) # to be added to next hidden
+            print("2) fc: {}".format(w2.get_shape()))
+            print("end result: {}".format(lateral.name))
 
             return lateral, [w1, b1, w2]
     else:
@@ -416,17 +527,43 @@ def lateral_connection(orig_hidden, dest_shape, self_i, current_op_shape=None):
             maps_in = ah.get_shape().as_list()[3]
 
             if len(dest_shape) > 1:   # conv layer to conv layer
-                lateral, w2, _ = tfc.conv2d("U", ah, maps_in, current_op_shape[2], size=current_op_shape[0],
-                                           stride=current_op_shape[3], act=None, omit_bias=omit_b, padding="SAME", trainable=train)
+                lateral, w2, _ = tfc.conv2d(
+                    "U", 
+                    ah, 
+                    maps_in, 
+                    current_op_shape[2], 
+                    size=current_op_shape[0],
+                    stride=current_op_shape[3], 
+                    act=None, 
+                    omit_bias=omit_b, 
+                    padding="SAME", 
+                    trainable=train
+                )
                 return lateral, [w2]
 
             else:  # conv layer to fc layer
                 c_size = np.prod(ah.get_shape().as_list()[1:])
                 c_flat = tf.reshape(ah, [-1, c_size])
-                lateral, w2, _ = tfc.fc("U", c_flat, c_size, dest_shape[0], act=None, omit_bias=True, trainable=train)
+                lateral, w2, _ = tfc.fc(
+                    "U", 
+                    c_flat, 
+                    c_size, 
+                    dest_shape[0], 
+                    act=None, 
+                    omit_bias=True, 
+                    trainable=train
+                )
                 return lateral, [w2]
 
         else:  # fc layer to fc layer
             n_in = ah.get_shape().as_list()[1]
-            lateral, w2, _ = tfc.fc("U", ah, n_in, dest_shape[0], act=None, omit_bias=True, trainable=train) # to be added to next hidden
+            lateral, w2, _ = tfc.fc(
+                "U", 
+                ah, 
+                n_in, 
+                dest_shape[0], 
+                act=None, 
+                omit_bias=True, 
+                trainable=train
+            ) # to be added to next hidden
             return lateral, [w2]

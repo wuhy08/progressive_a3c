@@ -12,12 +12,14 @@ from accum_trainer import AccumTrainer
 from game_ac_network import Network
 import cv2
 import IPython
+import constants
 
 LOG_INTERVAL = 100
 PERFORMANCE_LOG_INTERVAL = 1000
 
 #USE_ALE = False
 FLAGS = tf.app.flags.FLAGS
+IMG_SIZE = constants.img_size
 
 #pong_actions = [1, 2, 3]
 
@@ -117,7 +119,7 @@ class A3CTrainingThread(object):
                 scipy.misc.imsave("%s/%i.png" % (os.path.join(FLAGS.model_dir, "images"), i), rgb["image"][0])
         return np.dot(rgb[...,:3], [0.299, 0.587, 0.114])
 
-    def resize(self, img, size=(84, 84)):
+    def resize(self, img, size=(IMG_SIZE, IMG_SIZE)):
         return scipy.misc.imresize(img, size)
 
     def normalize_img(self, img):
