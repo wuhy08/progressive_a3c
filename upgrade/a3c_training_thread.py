@@ -8,6 +8,10 @@ import gym
 import os
 import scipy.misc
 
+from os import path
+sys.path.append("../../maze_block")
+from env import maze
+
 from accum_trainer import AccumTrainer
 from game_ac_network import Network
 import cv2
@@ -64,7 +68,9 @@ class A3CTrainingThread(object):
         #if USE_ALE:
         #    self.game_state = GameState(113 * thread_index)
         #else:
-        self.game = gym.make('Assault-v0')
+        # self.game = gym.make('Assault-v0')
+        self.game = maze.MazeEnv(width=6, height=6, rows=3, columns=3, pellets=False, num_pellets=0, random_goal=False, max_timesteps=100, flatten_output=False)
+
         #self.game.configure(str(5000 + thread_index))
         # game initialization
         self.observation = self.game.reset()
@@ -126,11 +132,11 @@ class A3CTrainingThread(object):
         return img/255.0
 
     def preprocess_img(self, img,  i=0):
-        return self.normalize_img(
-            self.resize(
-                self.rgb2gray(img, i)
-                )
-            )
+        # return self.normalize_img(
+        #     self.resize(
+        #         self.rgb2gray(img, i)
+        #         )
+        #     )
 
 
 

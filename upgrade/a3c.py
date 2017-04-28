@@ -56,10 +56,10 @@ class Trainer:
                 break
 
             diff_global_t = training_thread.process(
-                self.sess, 
-                self.global_t, 
+                self.sess,
+                self.global_t,
                 self.summary_writer,
-                self.summary_op, 
+                self.summary_op,
                 self.score_input
             )
 
@@ -91,14 +91,14 @@ class Trainer:
         print("CREATING AGENTS")
         for i in range(FLAGS.threads):
             training_thread = A3CTrainingThread(
-                i, 
-                self.global_network, 
+                i,
+                self.global_network,
                 initial_learning_rate,
                 learning_rate_input,
-                grad_applier, 
+                grad_applier,
                 FLAGS.global_t_max,
-                device=constants.device, 
-                sess=self.sess, 
+                device=constants.device,
+                sess=self.sess,
                 name="agent_{}_{}".format(constants.task_name, i)
             )
             self.training_threads.append(training_thread)
@@ -121,7 +121,7 @@ class Trainer:
         checkpoint = tf.train.get_checkpoint_state(FLAGS.model_dir)
         if checkpoint and checkpoint.model_checkpoint_path:
             self.saver.restore(
-                self.sess, 
+                self.sess,
                 checkpoint.model_checkpoint_path
                     if FLAGS.checkpoint is None else FLAGS.checkpoint
             )
@@ -148,7 +148,7 @@ class Trainer:
         for i in range(FLAGS.threads):
             train_threads.append(
                 threading.Thread(
-                    target=self.train_function, 
+                    target=self.train_function,
                     args=(i,)
                 )
             )
@@ -178,13 +178,13 @@ class Trainer:
         if not os.path.exists(FLAGS.model_dir + "/core"):
             os.mkdir(FLAGS.model_dir + '/core')
         self.saver.save(
-            self.sess, 
-            FLAGS.model_dir + '/checkpoint', 
+            self.sess,
+            FLAGS.model_dir + '/checkpoint',
             global_step=self.global_t
         )
 
         self.global_network.save(
-            self.sess, 
+            self.sess,
             '{}/core/checkpoint-{}.p'.format(
                 FLAGS.model_dir,self.global_t
             )
@@ -222,4 +222,3 @@ if __name__ == "__main__":
     trainer.setTensorBoard()
     trainer.setCheckPoint()
     trainer.start()
-
