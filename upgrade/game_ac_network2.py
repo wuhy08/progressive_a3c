@@ -4,10 +4,16 @@ import numpy as np
 import tf_common as tfc
 import constants
 import pickle
+import tensorflow.contrib.layers as layers
+import IPython
+
 
 FLAGS = tf.app.flags.FLAGS
 IMG_SIZE = constants.img_size
 HIST_FRM = constants.history_frames
+fc = layers.fully_connected
+conv2d = layers.conv2d
+relu = tf.nn.relu
 
 class Network(object):
     def __init__(self, name="agent"):
@@ -206,6 +212,325 @@ class Network(object):
 
         return dpdh  # fishers
 
+
+class PNN(object):
+
+    def __init__(self, name, structure, branch_layer = 1, dtype = tf.float32):
+        """
+        name: a string representing the name of PNN, will be used as name scope
+        structure: a list of hyperparameters for each NN layer, except the last layer
+        First element is a tuple of size 3, representing the dimension of the image 
+        and the history frame length
+        Starting from the second layer, each element is either an integer or 
+        a size-4 tuple. If the element is a size-4 tuple, it represents a conv-layer,
+        with the parameter (filter_dim_x, filter_dim_y, filter_stride, output_channel_num)
+        If the element is a size-1 tuple (it must be a size-1 tuple), 
+        then it represents a fc layer, where the value
+        is the number of the output.
+        To simplify the implementation, we assume all columns have the same structure
+        except the last layer.
+        Also assume the activation function is ReLU for all layers except the last layer
+        which is a softmax.
+        """
+        assert len(structure) > 1
+        self.name = name
+        self.structure = structure
+        self.branch_layer = branch_layer
+        self.n_col = 0
+        self.n_layer = len(structure)
+        self.cols = []
+        self.input_size = structure[0] # Should be (n_x, n_y, n_z)
+        self.input_sy = tf.placeholder(dtype = dtype, shape=[None] + list(self.input_size))
+        self.params = []
+        self.h_task_layer = []
+        #self.params_task_layer = []
+
+    def add_col(self, n_action):
+        if self.n_col == 0:
+            self.add_first_col(n_action)
+        else:
+            self.add_additional_col(n_action)
+
+    def add_first_col(self, n_action):
+        params = []
+        h = [self.input_sy]
+        with tf.variable_scope("{}/col0".format(self.name)):
+            i_layer = 1
+            for layer_str in self.structure[1:] + [(n_action,)]:
+                last_input = h[-1]
+                last_input_size = last_input.shape
+                if len(layer_str) == 4: #conv layer
+                    #if this layer is conv, the input shape must be in 4D (with the batch size)
+                    assert len(last_input_size) == 4 
+                    output = conv2d(
+                        last_input, 
+                        num_outputs = layer_str[3], 
+                        kernel_size = (layer_str[0], layer_str[1]), 
+                        stride = layer_str[2],
+                        padding = "SAME",
+                        activation_fn = relu,
+                        scope = "layer{}/conv".format(i_layer),
+                        biases_initializer = tf.constant_initializer(0.0) 
+                    )
+                    h.append(output)
+                elif len(layer_str) == 1: # fc layer
+                    if len(last_input_size) == 4: #if previous layer is conv
+                        h[-1] = layers.flatten(last_input, scope = "layer{}/flatten".format(i_layer-1))
+                        last_input = h[-1]
+                        last_input_size = last_input.shape
+                    # need to make sure the input size is [None, integer]
+                    assert len(last_input_size) == 2
+                    if i_layer == self.n_layer:
+                        activation_fn = None
+                    else:
+                        activation_fn = relu
+                    output = fc(
+                        last_input,
+                        num_outputs = layer_str[0],
+                        scope = "layer{}/fc".format(i_layer),
+                        activation_fn = activation_fn
+                    )
+                    h.append(output)
+                else:
+                    raise TypeError("layer structure must be either size-1 tuple or size-4 tuple")
+                i_layer = i_layer + 1
+        self.n_col += 1
+        self.h_task_layer.append(h)
+
+    def add_additional_col(self, n_action): # not finished here
+        params = []
+        h = self.h_task_layer[0][:self.branch_layer]
+        with tf.variable_scope("{}/col{}".format(self.name, self.n_col)):
+            i_layer = self.branch_layer
+            for layer_str in self.structure[self.branch_layer:] + [(n_action,)]:
+                last_input = h[-1]
+                last_input_size = last_input.shape
+                if len(layer_str) == 4: #conv layer
+                    #if this layer is conv, the input shape must be in 4D (with the batch size)
+                    assert len(last_input_size) == 4 
+                    output = conv2d(
+                        last_input, 
+                        num_outputs = layer_str[3], 
+                        kernel_size = (layer_str[0], layer_str[1]), 
+                        stride = layer_str[2],
+                        padding = "SAME",
+                        activation_fn = None,
+                        scope = "layer{}/conv".format(i_layer),
+                        biases_initializer = tf.constant_initializer(0.0) 
+                    )
+                    if i_layer != self.branch_layer:
+                        old_hs = tf.stack(
+                            [hs[i_layer-1] 
+                                for hs in self.h_task_layer[:self.n_col]],
+                            axis = -1,
+                            name = "layer{}/lateral/stack".format(i_layer)
+                        )
+                        assert old_hs.shape[-1] == self.n_col
+                        alpha = tf.get_variable(
+                            name="layer{}/lateral/adapter".format(i_layer),
+                            shape = [self.n_col],
+                            initializer=tf.truncated_normal_initializer(stddev=0.1)
+                        )
+                        lat_input = relu(
+                            tf.reduce_sum(
+                                tf.multiply(
+                                    old_hs, alpha, 
+                                    name = "layer{}/lateral/mul".format(i_layer)
+                                ), 
+                                axis = 4,
+                                name = "layer{}/lateral/reduce_sum".format(i_layer)
+                            ),
+                            name = "layer{}/lateral/Relu".format(i_layer)
+                        )
+                        add_output = conv2d(
+                            lat_input, 
+                            num_outputs = layer_str[3], 
+                            kernel_size = (layer_str[0], layer_str[1]), 
+                            stride = layer_str[2],
+                            padding = "SAME",
+                            activation_fn = None,
+                            scope = "layer{}/lateral/conv".format(i_layer),
+                            biases_initializer = tf.constant_initializer(0.0) 
+                        )
+                        output = tf.add(output, add_output, name="layer{}/combine".format(i_layer))
+                    output = relu(output, name="layer{}/combine/Relu".format(i_layer))
+                    h.append(output)
+                elif len(layer_str) == 1: # fc layer
+                    if len(last_input_size) == 4: #if previous layer is conv
+                        h[-1] = layers.flatten(last_input, scope = "layer{}/flatten".format(i_layer-1))
+                        last_input = h[-1]
+                        last_input_size = last_input.shape
+                    # need to make sure the input size is [None, integer]
+                    assert len(last_input_size) == 2
+                    output = fc(
+                        last_input,
+                        num_outputs = layer_str[0],
+                        scope = "layer{}/fc".format(i_layer),
+                        activation_fn = None
+                    )
+                    if i_layer != self.branch_layer:
+                        # if flattened:
+                        #     old_hs = tf.stack(
+                        #         [layers.flatten(hs[i_layer-1]) 
+                        #             for hs in self.h_task_layer[:self.n_col]],
+                        #         axis = -1
+                        #     )
+                        # else:
+                        old_hs = tf.stack(
+                            [hs[i_layer-1] 
+                                for hs in self.h_task_layer[:self.n_col]],
+                            axis = -1,
+                            name = "layer{}/lateral/stack".format(i_layer)
+                        )
+                        old_hs = layers.flatten(
+                            old_hs, 
+                            scope = "layer{}/lateral/flatten".format(i_layer)
+                        )
+                        #IPython.embed()
+                        add_hidden = fc(
+                            old_hs,
+                            num_outputs = int(last_input.shape[1]),
+                            scope = "layer{}/lateral/adapter".format(i_layer),
+                            activation_fn = relu,
+                        )
+                        add_output = fc(
+                            add_hidden,
+                            num_outputs = layer_str[0],
+                            scope = "layer{}/lateral/fc".format(i_layer),
+                            activation_fn = None,
+                        )
+                        output = tf.add(output, add_output, name="layer{}/combine".format(i_layer))
+                    if i_layer != self.n_layer:
+                        output = relu(output, name="layer{}/combine/Relu".format(i_layer))
+                    h.append(output)
+                else:
+                    raise TypeError("layer structure must be either size-1 tuple or size-4 tuple")
+                i_layer = i_layer + 1
+        self.n_col += 1
+        self.h_task_layer.append(h)
+
+
+
+
+
+
+
+
+
+
+
+
+def weight_variable(shape, stddev=0.1, initial=None, name="weight"):
+    if initial is None:
+        initial = tf.truncated_normal(shape, stddev=stddev, dtype=tf.float64)
+    return tf.Variable(initial, name=name)
+
+def bias_variable(shape, init_bias=0.1, initial=None, name="bias"):
+    if initial is None:
+        initial = tf.constant(init_bias, shape=shape, dtype=tf.float64)
+    return tf.Variable(initial, name=name)
+
+class InitialColumnProgNN(object):
+    """
+    Descr: Initial network to train for later use transfer learning with a
+        Progressive Neural Network.
+    Args:
+        topology - A list of number of units in each hidden dimension.
+                   First entry is input dimension.
+        activations - A list of activation functions to use on the transforms.
+        session - A TensorFlow session.
+    Returns:
+        None - attaches objects to class for InitialColumnProgNN.session.run()
+    """
+
+    def __init__(self, topology, activations, session, dtype=tf.float64):
+        n_input = topology[0]
+        # Layers in network.
+        L = len(topology) - 1
+        self.session = session
+        self.L = L
+        self.topology = topology
+        self.o_n = tf.placeholder(dtype,shape=[None, n_input])
+
+        self.W = []
+        self.b =[]
+        self.h = [self.o_n]
+        params = []
+        for k in range(L):
+            shape = topology[k:k+2]
+            self.W.append(weight_variable(shape))
+            self.b.append(bias_variable([shape[1]]))
+            self.h.append(activations[k](tf.matmul(self.h[-1], self.W[k]) + self.b[k]))
+            params.append(self.W[-1])
+            params.append(self.b[-1])
+        self.pc = ParamCollection(self.session, params)
+
+
+class ExtensibleColumnProgNN(object):
+    """
+    Descr: An extensible network column for use in transfer learning with a
+        Progressive Neural Network.
+    Args:
+        topology - A list of number of units in each hidden dimension.
+            First entry is input dimension.
+        activations - A list of activation functions to use on the transforms.
+        session - A TensorFlow session.
+        prev_columns - Previously trained columns, either Initial or Extensible,
+            we are going to create lateral connections to for the current column.
+    Returns:
+        None - attaches objects to class for ExtensibleColumnProgNN.session.run()
+    """
+
+    def __init__(self, topology, activations, session, prev_columns, dtype=tf.float64):
+        n_input = topology[0]
+        self.topology = topology
+        self.session = session
+        width = len(prev_columns)
+        # Layers in network. First value is n_input, so it doesn't count.
+        L = len(topology) -1
+        self.L = L
+        self.prev_columns = prev_columns
+
+        # Doesn't work if the columns aren't the same height.
+        assert all([self.L == x.L for x in prev_columns])
+
+        self.o_n = tf.placeholder(dtype, shape=[None, n_input])
+
+        self.W = [[]] * L
+        self.b = [[]] * L
+        self.U = []
+        for k in range(L-1):
+            self.U.append( [[]] * width )
+        self.h = [self.o_n]
+        # Collect parameters to hand off to ParamCollection.
+        params = []
+        for k in range(L):
+            W_shape = topology[k:k+2]
+            self.W[k] = weight_variable(W_shape)
+            self.b[k] = bias_variable([W_shape[1]])
+            if k == 0:
+                self.h.append(activations[k](tf.matmul(self.h[-1],self.W[k]) + self.b[k]))
+                params.append(self.W[k])
+                params.append(self.b[k])
+                continue
+            preactivation = tf.matmul(self.h[-1],self.W[k]) + self.b[k]
+            for kk in range(width):
+                U_shape = [prev_columns[kk].topology[k], topology[k+1]]
+                # Remember len(self.U) == L - 1!
+                self.U[k-1][kk] = weight_variable(U_shape)
+                # pprint(prev_columns[kk].h[k].get_shape().as_list())
+                # pprint(self.U[k-1][kk].get_shape().as_list())
+                preactivation +=  tf.matmul(prev_columns[kk].h[k],self.U[k-1][kk])
+            self.h.append(activations[k](preactivation))
+            params.append(self.W[k])
+            params.append(self.b[k])
+            for kk in range(width):
+                params.append(self.U[k-1][kk])
+
+        self.pc = ParamCollection(self.session, params)
+
+
+
 def create_column(col_names, i_task, state, col_hiddens):
     print("creating column {}".format(i_task))
     arch = [
@@ -311,7 +636,7 @@ def create_column(col_names, i_task, state, col_hiddens):
     #print("c lats:")
     #print(c_lats)
 
-    def add_lat(layer, i, act=tf.nn.relu):
+    def add_lat(layer, i, act=relu):
 
         if i_task <= 0:
             if act is None:
@@ -383,7 +708,7 @@ def create_column(col_names, i_task, state, col_hiddens):
             print("adding {} and {}".format(h_fc1, lat))
             lat_size = np.prod(lat.get_shape().as_list()[1:])
             lat_flat = tf.reshape(lat, [-1, lat_size])
-            h_fc1 = tf.nn.relu(h_fc1 + lat_flat)
+            h_fc1 = relu(h_fc1 + lat_flat)
 
         pi, wp, bp = add_lat(
             tfc.fc(

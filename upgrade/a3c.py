@@ -14,6 +14,7 @@ from game_ac_network import Network
 from a3c_training_thread import A3CTrainingThread
 from rmsprop_applier import RMSPropApplier
 import tf_common as tfc
+import IPython
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS
@@ -86,6 +87,7 @@ class Trainer:
         self.global_network = Network(
             name="core_{}".format(constants.task_name)
         )
+        IPython.embed()
         print("CREATING AGENTS")
         for i in range(FLAGS.threads):
             training_thread = A3CTrainingThread(
@@ -208,7 +210,7 @@ if __name__ == "__main__":
     flags.DEFINE_integer("screen_height", 227, "screen height")
 
     #flags.DEFINE_string("task_name", "foo", "name of task")
-    flags.DEFINE_string("column_names", "foo", "names of columns(tasks)")
+    flags.DEFINE_string("column_names", "foo,bar", "names of columns(tasks)")
     flags.DEFINE_string("transfer_model", None, "model to transfer from with progressive neural networks")
     #flags.DEFINE_integer("history_frames", 4, "history frames")
 
