@@ -2,13 +2,13 @@
 import tensorflow as tf
 import numpy as np
 #import tf_common as tfc
-import constants
+#import constants
 import pickle
 import tensorflow.contrib.layers as layers
 import IPython
 
 
-FLAGS = tf.app.flags.FLAGS
+#FLAGS = tf.app.flags.FLAGS
 #IMG_SIZE = constants.img_size
 #HIST_FRM = constants.history_frames
 fc = layers.fully_connected
@@ -22,7 +22,7 @@ relu = tf.nn.relu
 
 class PNN(object):
 
-    def __init__(self, name, structure, branch_layer = 1, dtype = tf.float32):
+    def __init__(self, name, structure, input_sy, branch_layer = 1):
         """
         name: a string representing the name of PNN, will be used as name scope
         structure: a list of hyperparameters for each NN layer, except the last layer
@@ -38,6 +38,7 @@ class PNN(object):
         except the last layer.
         Also assume the activation function is ReLU for all layers except the last layer
         which is a softmax.
+        input_sy should be [None, n_x, n_y, n_z] with float32
         """
         assert len(structure) > 1
         self.name = name
@@ -47,8 +48,9 @@ class PNN(object):
         self.n_layer = len(structure)
         self.cols = []
         self.input_size = structure[0] # Should be (n_x, n_y, n_z)
-        self.input_sy = tf.placeholder(dtype = dtype, shape=[None] + list(self.input_size))
-        self.params = []
+        #self.input_sy = tf.placeholder(dtype = tf.uint8, shape=[None] + list(self.input_size))
+        self.input_float_sy = tf.identity(input_sy, name = "{}/input".format(self.name))
+        #self.params = []
         self.h_task_layer = []
         #self.params_task_layer = []
 
@@ -60,7 +62,7 @@ class PNN(object):
 
     def add_first_col(self, n_action):
         params = []
-        h = [self.input_sy]
+        h = [self.input_float_sy]
         with tf.variable_scope("{}/col0".format(self.name)):
             i_layer = 1
             for layer_str in self.structure[1:] + [(n_action,)]:
@@ -79,10 +81,12 @@ class PNN(object):
                         scope = "layer{}/conv".format(i_layer),
                         biases_initializer = tf.constant_initializer(0.0) 
                     )
+                    output = tf.identity(output, name = "layer{}/h".format(i_layer))
                     h.append(output)
                 elif len(layer_str) == 1: # fc layer
                     if len(last_input_size) == 4: #if previous layer is conv
                         h[-1] = layers.flatten(last_input, scope = "layer{}/flatten".format(i_layer-1))
+                        h[-1] = tf.identity(h[-1], name = "layer{}/h_f".format(i_layer-1))
                         last_input = h[-1]
                         last_input_size = last_input.shape
                     # need to make sure the input size is [None, integer]
@@ -97,6 +101,7 @@ class PNN(object):
                         scope = "layer{}/fc".format(i_layer),
                         activation_fn = activation_fn
                     )
+                    output = tf.identity(output, name = "layer{}/h".format(i_layer))
                     h.append(output)
                 else:
                     raise TypeError("layer structure must be either size-1 tuple or size-4 tuple")
@@ -161,10 +166,12 @@ class PNN(object):
                         )
                         output = tf.add(output, add_output, name="layer{}/combine".format(i_layer))
                     output = relu(output, name="layer{}/combine/Relu".format(i_layer))
+                    output = tf.identity(output, name = "layer{}/h".format(i_layer))
                     h.append(output)
                 elif len(layer_str) == 1: # fc layer
                     if len(last_input_size) == 4: #if previous layer is conv
                         h[-1] = layers.flatten(last_input, scope = "layer{}/flatten".format(i_layer-1))
+                        h[-1] = tf.identity(h[-1], name = "layer{}/h_f".format(i_layer-1))
                         last_input = h[-1]
                         last_input_size = last_input.shape
                     # need to make sure the input size is [None, integer]
@@ -176,13 +183,6 @@ class PNN(object):
                         activation_fn = None
                     )
                     if i_layer != self.branch_layer:
-                        # if flattened:
-                        #     old_hs = tf.stack(
-                        #         [layers.flatten(hs[i_layer-1]) 
-                        #             for hs in self.h_task_layer[:self.n_col]],
-                        #         axis = -1
-                        #     )
-                        # else:
                         old_hs = tf.stack(
                             [hs[i_layer-1] 
                                 for hs in self.h_task_layer[:self.n_col]],
@@ -209,12 +209,28 @@ class PNN(object):
                         output = tf.add(output, add_output, name="layer{}/combine".format(i_layer))
                     if i_layer != self.n_layer:
                         output = relu(output, name="layer{}/combine/Relu".format(i_layer))
+                    output = tf.identity(output, name = "layer{}/h".format(i_layer))
                     h.append(output)
                 else:
                     raise TypeError("layer structure must be either size-1 tuple or size-4 tuple")
                 i_layer = i_layer + 1
         self.n_col += 1
         self.h_task_layer.append(h)
+
+    def get_collection_of_col(self, i_col):
+        return tf.get_collection(
+            tf.GraphKeys.TRAINABLE_VARIABLES, 
+            "{}/col{}".format(self.name, i_col)
+        )
+    def assign_values_to_col_temp(self, values, sess):
+        variables = self.get_collection_of_col(0)
+        assign_ops = []
+        for var, val in zip(variables, values):
+            assign_ops.append(tf.assign(var, val))
+        sess.run(assign_ops)
+
+    def get_q_val_of_col(self, i_col):
+        return self.h_task_layer[i_col][-1]
 
 
 
